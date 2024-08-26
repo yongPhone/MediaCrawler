@@ -1,11 +1,15 @@
 import asyncio
 import json
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import urlencode
 
 import httpx
+import requests
+from numpy.distutils.conv_template import header
 from playwright.async_api import BrowserContext, Page
+from requests import request
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 import config
@@ -91,6 +95,7 @@ class XiaoHongShuClient(AbstractApiClient):
         if return_response:
             return response.text
         data: Dict = response.json()
+
         if data["success"]:
             return data.get("data", data.get("success", {}))
         elif data["code"] == self.IP_ERROR_CODE:
@@ -108,11 +113,15 @@ class XiaoHongShuClient(AbstractApiClient):
         Returns:
 
         """
+        print(">>>>>>>>>>>>start headers")
+
         final_uri = uri
         if isinstance(params, dict):
             final_uri = (f"{uri}?"
                          f"{urlencode(params)}")
         headers = await self._pre_headers(final_uri)
+
+        print("<<<<<<<<<<<<end headers")
         return await self.request(method="GET", url=f"{self._host}{final_uri}", headers=headers)
 
     async def post(self, uri: str, data: dict, **kwargs) -> Dict:
@@ -125,10 +134,16 @@ class XiaoHongShuClient(AbstractApiClient):
         Returns:
 
         """
+
         headers = await self._pre_headers(uri, data)
+
         json_str = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
+
+        # new_url = "https://customer.xiaohongshu.com"
+        # return await self.request(method="POST", url=f"{self._host}{uri}",
+        #                           data=json_str, headers=headers, **kwargs)
         return await self.request(method="POST", url=f"{self._host}{uri}",
-                                  data=json_str, headers=headers, **kwargs)
+                                  data=json_str.encode("utf-8"), headers=headers, **kwargs)
 
     async def get_note_media(self, url: str) -> Union[bytes, None]:
         async with httpx.AsyncClient(proxies=self.proxies) as client:
@@ -442,10 +457,9 @@ class XiaoHongShuClient(AbstractApiClient):
         }
         return await self.post(uri, data=data, return_response=True)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
     async def get_note_by_id_from_html(self, note_id: str):
         """
-        通过解析网页版的笔记详情页HTML，获取笔记详情, 该接口可能会出现失败的情况，这里尝试重试3次
+        通过解析网页版的笔记详情页HTML，获取笔记详情
         copy from https://github.com/ReaJason/xhs/blob/eb1c5a0213f6fbb592f0a2897ee552847c69ea2d/xhs/core.py#L217-L259
         thanks for ReaJason
         Args:
@@ -454,6 +468,7 @@ class XiaoHongShuClient(AbstractApiClient):
         Returns:
 
         """
+
         def camel_to_underscore(key):
             return re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
 
@@ -484,3 +499,30 @@ class XiaoHongShuClient(AbstractApiClient):
             note_dict = transform_json_keys(state)
             return note_dict["note"]["note_detail_map"][note_id]["note"]
         raise DataFetchError(html)
+
+    async def post_comments_by_noteId(self, note_id: str, comment_content: str) -> Dict:
+        """
+        在指定帖子下评论内容
+        Returns:
+
+        """
+        uri = "/api/sns/web/v1/comment/post"
+        data = {
+            "note_id": note_id,
+            "content": comment_content,
+            "at_users": []
+        }
+        json_str = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
+        pre_headers = await self._pre_headers(uri, data)
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            'content-type': 'application/json;charset=UTF-8',
+            'sec-fetch-site': 'same-site',
+            "x-s": pre_headers.get("X-S"),
+            "cookie": pre_headers.get("Cookie"),
+        }
+        response = requests.request("POST", url="https://edith.xiaohongshu.com/api/sns/web/v1/comment/post",
+                                    data=json_str, headers=headers).text
+        print(response)
+
